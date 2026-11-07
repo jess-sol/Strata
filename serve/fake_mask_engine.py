@@ -33,7 +33,7 @@ def main() -> int:
         line = line.rstrip("\r\n")
         if line == "QUIT":
             return 0
-        if line == "STOP" or not line.startswith("GEN "):
+        if line == "STOP" or not line.startswith(("GEN ", "GENI ")):
             continue
         f = line.split()
         max_new = int(f[1])

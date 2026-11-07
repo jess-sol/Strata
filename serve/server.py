@@ -2793,13 +2793,10 @@ class StrataEngine:
         carry = NO_LINE                  # a line read for a token's LP line, held until it is used
         # an image request takes the same sampling keys as text (#75: it used to decode greedily whatever was asked)
         rid_key = f" rid={rid}" if rid is not None else ""
-        head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {})}{rid_key} {embeddings}" if embeddings else \
-            f"GEN {int(max_new)}{self.sampling_keys(sampling or {})}{rid_key}"
-        head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {})} {embeddings}" if embeddings else \
-            f"GEN {int(max_new)}{self.sampling_keys(sampling or {})}"
-        c = (sampling or {}).get(constrain.KEY) if self.supports_mask and not embeddings else None
-        if c is not None:
-            head += " mask=1"                               # the engine asks MQ before every window
+        c = (sampling or {}).get(constrain.KEY) if self.supports_mask else None
+        # mask=1: the engine asks MQ before every window; GENI reads the same keys as GEN
+        keys = f"{self.sampling_keys(sampling or {})}{rid_key}" + (" mask=1" if c is not None else "")
+        head = f"GENI {int(max_new)}{keys} {embeddings}" if embeddings else f"GEN {int(max_new)}{keys}"
         if prefill_only:                                 # split serving (serve/split.py): read the prompt, make no token
             if embeddings or int(max_new) != 0:
                 raise ValueError("prefill_only is a text prompt and max_new 0")

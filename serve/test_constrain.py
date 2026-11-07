@@ -528,6 +528,14 @@ class FakeEngine(Http):
         answers = self.log.read_text().split()
         self.assertGreater(answers.count("MK"), 0)
 
+    def test_an_image_request_takes_the_masks_too(self):
+        # GENI carries GEN's keys and the engine decodes both in one loop, so a JSON format over pictures is
+        # masked like one over text
+        self.start(StrataEngine(str(self.exe), ["--max-context", "8192"]))
+        sampling = self.svc._with_constraint({"response_format": FMT}, None, False)
+        list(self.engine.generate(list(b"a number"), 64, sampling, threading.Event(), embeddings="pictures.bin"))
+        self.assertGreater(self.log.read_text().split().count("MK"), 0)
+
     def test_an_older_engine_is_unchanged(self):
         self.start(StrataEngine(str(self.exe), ["--max-context", "8192", "--no-mask"]))
         self.assertFalse(self.engine.supports_mask)
