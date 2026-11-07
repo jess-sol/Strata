@@ -1,4 +1,5 @@
 """Exercise the JSON contract through HTTP, including H3's strict Story shape."""
+import contextlib
 import json
 import unittest
 import urllib.error
@@ -212,15 +213,27 @@ class Structured(unittest.TestCase):
                 self.assertEqual(self.chat('{"claim_text":"The term is 12 months."}', response_format=fmt)[0], 200)
                 self.assertEqual(self.chat("[1, 2]", response_format=fmt)[0], 502)
 
-    def test_schemas_that_allow_non_objects_are_still_rejected(self):
+    def test_array_roots_are_accepted_with_or_without_jsonschema(self):
+        # A root array (a detection list, the bare shape Qwen-VL grounding answers in) is one JSON container: the
+        # answer must be that array, and an object answer is refused.
+        detect = {"type": "array", "minItems": 1, "items": object_schema({"label": TEXT})}
+        fmt = {"type": "json_schema", "json_schema": {"name": "detect", "strict": True, "schema": detect}}
+        found = [{"label": "mug"}, {"label": "plate"}]
+        for without in ([False, True] if HAVE_JSONSCHEMA else [True]):
+            with self.subTest(without_jsonschema=without), \
+                    mock.patch.object(structured, "_jsonschema", False) if without else contextlib.nullcontext():
+                code, reply = self.chat(json.dumps(found), response_format=fmt)
+                self.assertEqual(code, 200)
+                self.assertEqual(json.loads(reply["choices"][0]["message"]["content"]), found)
+                self.assertEqual(self.chat('{"label":"mug"}', response_format=fmt)[0], 502)
+
+    def test_schemas_that_allow_non_containers_are_still_rejected(self):
         obj = {"type": "object"}
         schemas = [
-            {"type": "array", "items": obj},
             {"type": "string"},
             {"type": ["object", "null"]},
             {"anyOf": [obj, {"type": "string"}]},
             {"anyOf": []},
-            {"oneOf": [obj, {"type": "array"}]},
             {"allOf": [{"type": "string"}]},
             {"properties": {"x": {"type": "string"}}},           # no type: any JSON value validates
             {"$ref": "#/$defs/a", "$defs": {"a": {"$ref": "#/$defs/a"}}},   # reference cycle

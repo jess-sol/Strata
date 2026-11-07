@@ -15,17 +15,29 @@ class StructuredOutputError(RuntimeError):
     pass
 
 
-class _ObjectOnly:
-    """The validator for json_object, and for json_schema without jsonschema: one JSON object."""
+_KIND_TYPES = {"object": dict, "array": list}
+
+
+class _RootOnly:
+    """The validator for json_object, and for json_schema without jsonschema: one JSON value of a kind the root takes."""
+
+    def __init__(self, kinds):
+        self.kinds = kinds
 
     def iter_errors(self, value):
-        if not isinstance(value, dict):
-            yield _ObjectError()
+        if not any(isinstance(value, _KIND_TYPES[k]) for k in self.kinds):
+            yield _RootError(self.kinds)
 
 
-class _ObjectError:
+class _RootError:
     absolute_path = ()
-    message = "the answer is not a JSON object"
+
+    def __init__(self, kinds):
+        self.message = f"the answer is not a JSON {_kind_noun(kinds)}"
+
+
+def _kind_noun(kinds):
+    return " or ".join(k for k in ("object", "array") if k in kinds)
 
 
 class _Repairing:
@@ -91,33 +103,41 @@ def jsonschema_modules():
         return _jsonschema or None
 
 
-def _only_objects(node, root, refs=()):
-    """True when every value `node` accepts is a JSON object, so "return one JSON object" stays true.
+def _root_kinds(node, root, refs=()):
+    """The JSON containers ("object", "array") that every value `node` accepts is one of, so "return one JSON object"
+    (or array) stays true and extract_json finds the answer; None when a value can also be a scalar or null.
 
-    `type: object`, an anyOf/oneOf whose branches all qualify (e.g. a root union of object shapes, which llama.cpp's
-    grammar path accepts and apps send), an allOf with a qualifying member, or a local `$ref` to one of these.
-    Anything that can also be an array, string, number, boolean or null (including `type: ["object", "null"]`) is
-    not, and a `$ref` cycle never qualifies.
+    `type: object` or `array` (or a list of those), an anyOf/oneOf whose branches all qualify (e.g. a root union of
+    object shapes, which llama.cpp's grammar path accepts and apps send), an allOf with a qualifying member, or a local
+    `$ref` to one of these. `type: ["object", "null"]` does not qualify, and a `$ref` cycle never does.
     """
     if not isinstance(node, dict):
-        return False
-    if node.get("type") == "object":
-        return True
+        return None
+    t = node.get("type")
+    types = [t] if isinstance(t, str) else t if isinstance(t, list) else None
+    if types and all(x in _KIND_TYPES for x in types):
+        return frozenset(types)
     ref = node.get("$ref")
     if isinstance(ref, str) and ref.startswith("#") and ref not in refs:
         target = root
         for part in ref[1:].split("/")[1:]:
             part = part.replace("~1", "/").replace("~0", "~")
             if not isinstance(target, dict) or part not in target:
-                return False
+                return None
             target = target[part]
-        return _only_objects(target, root, refs + (ref,))
+        return _root_kinds(target, root, refs + (ref,))
     for key in ("anyOf", "oneOf"):
         branches = node.get(key)
-        if isinstance(branches, list) and branches and all(_only_objects(b, root, refs) for b in branches):
-            return True
+        if isinstance(branches, list) and branches:
+            kinds = [_root_kinds(b, root, refs) for b in branches]
+            if all(k is not None for k in kinds):
+                return frozenset().union(*kinds)
     branches = node.get("allOf")
-    return isinstance(branches, list) and any(_only_objects(b, root, refs) for b in branches)
+    if isinstance(branches, list):
+        kinds = [k for k in (_root_kinds(b, root, refs) for b in branches) if k is not None]
+        if kinds:
+            return frozenset.intersection(*kinds) or None
+    return None
 
 
 def prepare_format(response_format, messages, with_tools=False):
@@ -148,9 +168,9 @@ def prepare_format(response_format, messages, with_tools=False):
         if "strict" in spec and not isinstance(spec["strict"], bool):
             raise ValueError("response_format.json_schema.strict must be boolean")
         schema = spec["schema"]
-        if not _only_objects(schema, schema):
-            raise ValueError("response_format schema must accept only JSON objects at its root "
-                             "(type object, or anyOf/oneOf of object schemas)")
+        if _root_kinds(schema, schema) is None:
+            raise ValueError("response_format schema must accept only JSON objects or arrays at its root "
+                             "(type object or array, or anyOf/oneOf of such schemas)")
         modules = jsonschema_modules()
     else:
         raise ValueError("response_format.type must be text, json_object or json_schema")
@@ -165,8 +185,9 @@ def prepare_format(response_format, messages, with_tools=False):
             for value in node:
                 check_refs(value)
     check_refs(schema)
+    kinds = _root_kinds(schema, schema)
     if modules is None:
-        validator = _ObjectOnly()
+        validator = _RootOnly(kinds)
     else:
         validators, SchemaError, Registry, NoSuchResource = modules
 
@@ -179,7 +200,7 @@ def prepare_format(response_format, messages, with_tools=False):
             validator = cls(schema, registry=Registry(retrieve=no_remote))
         except SchemaError as exc:
             raise ValueError(f"invalid response_format schema: {exc.message}") from exc
-    directive = ("OUTPUT FORMAT REQUIREMENT: Return exactly one JSON object matching the JSON Schema below. "
+    directive = (f"OUTPUT FORMAT REQUIREMENT: Return exactly one JSON {_kind_noun(kinds)} matching the JSON Schema below. "
                  "No Markdown, headings, code fences, commentary, or text outside the JSON. "
                  "Use every required field, correct types, and only allowed fields. "
                  "Put all requested writing inside the appropriate JSON string fields.\nJSON Schema:\n" +
@@ -203,9 +224,9 @@ def prepare_format(response_format, messages, with_tools=False):
 
 
 def extract_json(text: str) -> str:
-    """The first JSON object in `text`: a ```-fenced block's inside when there is one, else the text
-    from its first `{`.  Empty when there is nothing to take.  The server's json_schema logprobs
-    alignment reads the model's own JSON form with it."""
+    """The JSON answer in `text`: a ```-fenced block's inside when there is one, else the array the text
+    starts with, else the text from its first `{`.  Empty when there is nothing to take.  The server's
+    json_schema logprobs alignment reads the model's own JSON form with it."""
     s = (text or "").strip()
     if not s:
         return ""
@@ -215,9 +236,11 @@ def extract_json(text: str) -> str:
             end = s.find("```", first + 1)
             if end != -1:
                 s = s[first + 1:end].strip()
-    start = s.find("{")
+    start = 0 if s.startswith("[") else s.find("{")
     if start == -1:
         return s
+    opener = s[start]
+    closer = "]" if opener == "[" else "}"
     depth = 0
     in_str = False
     esc = False
@@ -233,9 +256,9 @@ def extract_json(text: str) -> str:
         else:
             if ch == "\"":
                 in_str = True
-            elif ch == "{":
+            elif ch == opener:
                 depth += 1
-            elif ch == "}":
+            elif ch == closer:
                 depth -= 1
                 if depth == 0:
                     return s[start:i + 1]
