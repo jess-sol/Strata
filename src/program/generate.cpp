@@ -18983,6 +18983,8 @@ int main(int argc, char** argv) {
                         break;
                     }
                 }
+                if (req_mask && !merged)   // a merged window's rows are the prompt's: all of them are committed
+                    strata::core::mask_window_cut(T, chain_n, T_mtp, strata::kernels::kVerifyMaxT);
                 // 3-1: the mask exchange, with this window's drafts on the MQ line.  The server looks them through
                 // the grammar and answers one mask row per draft it accepts (MK: one row, MKN: n rows); the row
                 // count is the grammar's own cap on the window.  STOP/cancel keeps its old check position.

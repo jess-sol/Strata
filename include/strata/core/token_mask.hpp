@@ -10,6 +10,7 @@
 //                      "MQ d1 .. dT-1" and the server answers MKN only when it looked the drafts through.
 // Header-only and backend-neutral: the CUDA, HIP and SYCL builds use the same host code.
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
@@ -143,6 +144,15 @@ inline int mask_cut_accepted(const int32_t* outv, int a, const std::vector<int32
         for (const int32_t c : cut)
             if (outv[i] == c) return i;
     return a;
+}
+
+/// A decode window cut to the rows one mask reply may hold (max_rows, kVerifyMaxT: the MKN parser's cap above) before
+/// MQ asks for it: suffix drafts build longer windows, and a reply for every row of one would end the request.  The
+/// chained drafts behind the T_mtp MTP rows keep what still fits.
+inline void mask_window_cut(int& T, int& chain_n, int T_mtp, int max_rows) {
+    if (T <= max_rows) return;
+    T = max_rows;
+    chain_n = std::max(0, max_rows - T_mtp);
 }
 
 /// Whether token v is allowed by the mask.  For row i of an MKN answer pass words.data() + i * n_words; the row is
