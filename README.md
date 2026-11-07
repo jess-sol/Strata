@@ -1,3 +1,14 @@
+> **About this fork.** This is [Strata](https://github.com/Niko1221/Strata) with constrained
+> decoding. A `json_schema` or `json_object` response format, or a tool call, is enforced
+> token by token with [llguidance](https://github.com/guidance-ai/llguidance) masks, so the
+> answer always parses and matches its schema, and MTP drafting stays on while it does. The
+> masks come from ncphri's draft pull requests
+> [#3800](https://github.com/Niko1221/Strata/pull/3800) and
+> [#4222](https://github.com/Niko1221/Strata/pull/4222). On top of them, image requests are
+> masked too, a schema's root may be an array (the shape Qwen-VL grounding answers in), and
+> masked requests take speculative drafts of any length. `main` is upstream's `main` with
+> these commits rebased onto it.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="apps/host/public/brand/strata-lockup-dark.svg">
